@@ -1,11 +1,5 @@
 @firewall_updater_HostAddress = http://localhost:5298
 
-GET {{firewall_updater_HostAddress}}/todos/
+# Get service public IP address
+GET {{firewall_updater_HostAddress}}/ip/
 Accept: application/json
-
-###
-
-GET {{firewall_updater_HostAddress}}/todos/1
-Accept: application/json
-
-###

@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Http.HttpResults;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
@@ -7,6 +6,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
 });
+
+builder.Services.AddHttpClient();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<PublicIpService>();
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -18,31 +21,30 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-Todo[] sampleTodos =
-[
-    new(1, "Walk the dog"),
-    new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),
-    new(3, "Do the laundry", DateOnly.FromDateTime(DateTime.Now.AddDays(1))),
-    new(4, "Clean the bathroom"),
-    new(5, "Clean the car", DateOnly.FromDateTime(DateTime.Now.AddDays(2)))
-];
+// Public IP information endpoint
+app.MapGet(
+        "/ip",
+        async (PublicIpService ipService) =>
+        {
+            var publicIp = await ipService.GetPublicIpAsync();
 
-var todosApi = app.MapGroup("/todos");
-todosApi.MapGet("/", () => sampleTodos)
-        .WithName("GetTodos");
+            if (publicIp == null)
+            {
+                return Results.Problem("Failed to retrieve public IP address", statusCode: 503);
+            }
 
-todosApi.MapGet("/{id}", Results<Ok<Todo>, NotFound> (int id) =>
-    sampleTodos.FirstOrDefault(a => a.Id == id) is { } todo
-        ? TypedResults.Ok(todo)
-        : TypedResults.NotFound())
-    .WithName("GetTodoById");
+            return Results.Ok(new IpInfo(publicIp));
+        }
+    )
+    .WithName("GetPublicIp")
+    .WithSummary("Get the service's public IP address")
+    .WithDescription(
+        "Returns the public/external IP address that other services see when this service makes outbound calls. Cached for 5 minutes."
+    );
 
 app.Run();
 
-public record Todo(int Id, string? Title, DateOnly? DueBy = null, bool IsComplete = false);
+public record IpInfo(string IpAddress);
 
-[JsonSerializable(typeof(Todo[]))]
-internal partial class AppJsonSerializerContext : JsonSerializerContext
-{
-
-}
+[JsonSerializable(typeof(IpInfo))]
+internal partial class AppJsonSerializerContext : JsonSerializerContext { }
