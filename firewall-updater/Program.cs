@@ -1,6 +1,15 @@
 using System.Text.Json.Serialization;
+using Serilog;
 
 var builder = WebApplication.CreateSlimBuilder(args);
+
+// Configure Serilog
+builder.Host.UseSerilog(
+    (context, services, configuration) =>
+    {
+        configuration.ReadFrom.Configuration(context.Configuration).ReadFrom.Services(services);
+    }
+);
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {

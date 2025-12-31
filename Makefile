@@ -1,5 +1,9 @@
 .PHONY: all
 
+setup:
+	dotnet tool restore
+	dotnet restore
+
 dev:
 	dotnet watch run --project firewall-updater
 
@@ -14,4 +18,6 @@ run: dev
 test:
 	dotnet test --project firewall-updater
 
-	
+quality:
+	dotnet csharpier format .
+ 
