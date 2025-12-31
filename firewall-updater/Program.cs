@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Mvc.ApplicationParts;
 using Serilog;
 
 var builder = WebApplication.CreateSlimBuilder(args);
@@ -51,9 +52,49 @@ app.MapGet(
         "Returns the public/external IP address that other services see when this service makes outbound calls. Cached for 5 minutes."
     );
 
+app.MapGet(
+    "/firewall-rules",
+    () =>
+    {
+        var rules = builder
+            .Configuration.GetSection("FirewallRules")
+            .Get<List<AzureFirewallConfiguration>>();
+        return Results.Ok(rules);
+    }
+);
+
+app.MapGet(
+    "/firewall-rules/{name}",
+    (string name) =>
+    {
+        var rule = builder
+            .Configuration.GetSection("FirewallRules")
+            .Get<List<AzureFirewallConfiguration>>()
+            ?.FirstOrDefault(r => r.name == name);
+        if (rule == null)
+        {
+            return Results.NotFound(new { message = $"Firewall rule {name} not found" });
+        }
+        return Results.Ok(new FirewallRule(rule.name, rule.appId, rule.tenant));
+    }
+);
+
 app.Run();
 
-public record IpInfo(string IpAddress);
+public class AzureFirewallConfiguration
+{
+    public string name { get; set; } = "";
+    public string appId { get; set; } = "";
+    public string tenant { get; set; } = "";
+    public string password { get; set; } = "";
+}
+
+public record FirewallRules(List<FirewallRule> rules);
+
+public record FirewallRule(string name, string description, string tenant);
 
 [JsonSerializable(typeof(IpInfo))]
+[JsonSerializable(typeof(FirewallRule))]
+[JsonSerializable(typeof(FirewallRules))]
+[JsonSerializable(typeof(List<AzureFirewallConfiguration>))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext { }

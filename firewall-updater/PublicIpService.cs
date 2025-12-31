@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 
+public record IpInfo(string IpAddress);
+
 class PublicIpService
 {
     private readonly IHttpClientFactory _httpClientFactory;
