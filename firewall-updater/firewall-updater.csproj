@@ -1,10 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>firewall_updater</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <UserSecretsId>623ea6fb-bd07-47be-84e6-2e46ac5d61b4</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

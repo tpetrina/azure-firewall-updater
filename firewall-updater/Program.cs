@@ -59,7 +59,16 @@ app.MapGet(
         var rules = builder
             .Configuration.GetSection("FirewallRules")
             .Get<List<AzureFirewallConfiguration>>();
-        return Results.Ok(rules);
+        // Return only relevant info, omitting password
+        var trimmedRules = rules
+            ?.Select(r => new FirewallRule(
+                r.name,
+                r.appId,
+                r.tenant,
+                string.IsNullOrWhiteSpace(r.password) ? null : "********"
+            ))
+            .ToList();
+        return Results.Ok(trimmedRules);
     }
 );
 
@@ -91,7 +100,7 @@ public class AzureFirewallConfiguration
 
 public record FirewallRules(List<FirewallRule> rules);
 
-public record FirewallRule(string name, string description, string tenant);
+public record FirewallRule(string name, string description, string tenant, string password = "");
 
 [JsonSerializable(typeof(IpInfo))]
 [JsonSerializable(typeof(FirewallRule))]
