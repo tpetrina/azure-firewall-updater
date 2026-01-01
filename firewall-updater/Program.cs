@@ -112,6 +112,22 @@ app.MapGet(
     }
 );
 
+// Health check endpoints
+app.MapGet("/health", () => Results.Ok())
+    .WithName("HealthCheck")
+    .WithSummary("Health check endpoint")
+    .WithDescription("Returns 200 OK if the service is running.");
+
+app.MapGet("/health/live", () => Results.Ok())
+    .WithName("LivenessCheck")
+    .WithSummary("Liveness probe endpoint")
+    .WithDescription("Returns 200 OK if the service is alive.");
+
+app.MapGet("/health/ready", () => Results.Ok())
+    .WithName("ReadinessCheck")
+    .WithSummary("Readiness probe endpoint")
+    .WithDescription("Returns 200 OK if the service is ready to accept requests.");
+
 app.Run();
 
 public class AzureFirewallConfiguration
