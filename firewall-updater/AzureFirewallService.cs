@@ -185,6 +185,221 @@ public class AzureFirewallService
             config.serverName
         );
     }
+
+    /// <summary>
+    /// Creates a firewall rule with the specified name and IP range.
+    /// If a rule with the given name already exists, retries with incremented suffix (e.g., "Name - 1", "Name - 2").
+    /// </summary>
+    /// <param name="config">Azure firewall configuration</param>
+    /// <param name="ruleName">Base name for the firewall rule</param>
+    /// <param name="startIpAddress">Start IP address of the range</param>
+    /// <param name="endIpAddress">End IP address of the range</param>
+    /// <param name="maxRetries">Maximum number of retry attempts with incremented names (default: 100)</param>
+    /// <returns>The created firewall rule or null if failed</returns>
+    public async Task<AzureFirewall?> CreateFirewallRuleAsync(
+        AzureFirewallConfiguration config,
+        string ruleName,
+        string startIpAddress,
+        string endIpAddress,
+        int maxRetries = 100
+    )
+    {
+        if (string.IsNullOrEmpty(config.tenant))
+        {
+            _logger.LogError(
+                "Tenant ID is required for creating firewall rules. Configuration: {Name}",
+                config.name
+            );
+            return null;
+        }
+
+        var tokenResponse = await GetAccessTokenAsync(config.tenant, config.appId, config.password);
+
+        if (tokenResponse == null)
+        {
+            _logger.LogError("Failed to obtain access token for configuration {Name}", config.name);
+            return null;
+        }
+
+        return await CreateFirewallRuleAsync(
+            config.subscriptionId,
+            tokenResponse.AccessToken,
+            config.resourceGroup,
+            config.serverName,
+            ruleName,
+            startIpAddress,
+            endIpAddress,
+            maxRetries
+        );
+    }
+
+    /// <summary>
+    /// Creates a firewall rule with the specified name and IP range.
+    /// If a rule with the given name already exists, retries with incremented suffix (e.g., "Name - 1", "Name - 2").
+    /// </summary>
+    /// <param name="subscriptionId">Azure subscription ID</param>
+    /// <param name="accessToken">Bearer access token</param>
+    /// <param name="resourceGroup">Resource group name</param>
+    /// <param name="serverName">SQL server name</param>
+    /// <param name="ruleName">Base name for the firewall rule</param>
+    /// <param name="startIpAddress">Start IP address of the range</param>
+    /// <param name="endIpAddress">End IP address of the range</param>
+    /// <param name="maxRetries">Maximum number of retry attempts with incremented names (default: 100)</param>
+    /// <returns>The created firewall rule or null if failed</returns>
+    public async Task<AzureFirewall?> CreateFirewallRuleAsync(
+        string subscriptionId,
+        string accessToken,
+        string resourceGroup,
+        string serverName,
+        string ruleName,
+        string startIpAddress,
+        string endIpAddress,
+        int maxRetries = 100
+    )
+    {
+        var currentName = ruleName;
+
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            if (attempt > 0)
+            {
+                currentName = $"{ruleName} - {attempt}";
+            }
+
+            var result = await TryCreateFirewallRuleAsync(
+                subscriptionId,
+                accessToken,
+                resourceGroup,
+                serverName,
+                currentName,
+                startIpAddress,
+                endIpAddress
+            );
+
+            if (result.Success)
+            {
+                return result.Firewall;
+            }
+
+            if (!result.NameConflict)
+            {
+                _logger.LogError(
+                    "Failed to create firewall rule '{RuleName}' due to non-recoverable error",
+                    currentName
+                );
+                return null;
+            }
+
+            _logger.LogDebug(
+                "Firewall rule name '{RuleName}' already exists, trying with incremented suffix",
+                currentName
+            );
+        }
+
+        _logger.LogError(
+            "Failed to create firewall rule after {MaxRetries} attempts. Base name: '{RuleName}'",
+            maxRetries,
+            ruleName
+        );
+        return null;
+    }
+
+    private async Task<(bool Success, bool NameConflict, AzureFirewall? Firewall)> TryCreateFirewallRuleAsync(
+        string subscriptionId,
+        string accessToken,
+        string resourceGroup,
+        string serverName,
+        string ruleName,
+        string startIpAddress,
+        string endIpAddress
+    )
+    {
+        string apiUrl =
+            $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Sql/servers/{serverName}/firewallRules/{Uri.EscapeDataString(ruleName)}?api-version=2023-08-01";
+
+        _logger.LogDebug(
+            "Creating firewall rule '{RuleName}' with IP range {StartIp} - {EndIp}",
+            ruleName,
+            startIpAddress,
+            endIpAddress
+        );
+
+        try
+        {
+            using var httpClient = _httpClientFactory.CreateClient("AzureManagement");
+            httpClient.Timeout = TimeSpan.FromSeconds(60);
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                accessToken
+            );
+
+            var requestBody = new CreateFirewallRuleRequest
+            {
+                Properties = new CreateFirewallRuleProperties
+                {
+                    StartIpAddress = startIpAddress,
+                    EndIpAddress = endIpAddress
+                }
+            };
+
+            var jsonContent = JsonSerializer.Serialize(
+                requestBody,
+                AzureJsonContext.Default.CreateFirewallRuleRequest
+            );
+            var content = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+
+            var response = await httpClient.PutAsync(apiUrl, content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var firewall = JsonSerializer.Deserialize(
+                    responseContent,
+                    AzureJsonContext.Default.AzureFirewall
+                );
+
+                _logger.LogInformation(
+                    "Successfully created firewall rule '{RuleName}' with IP range {StartIp} - {EndIp}",
+                    ruleName,
+                    startIpAddress,
+                    endIpAddress
+                );
+
+                return (true, false, firewall);
+            }
+
+            var errorContent = await response.Content.ReadAsStringAsync();
+
+            // Check if the error is due to name conflict (HTTP 409 Conflict)
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                _logger.LogDebug(
+                    "Firewall rule name conflict for '{RuleName}'. Status: {StatusCode}",
+                    ruleName,
+                    response.StatusCode
+                );
+                return (false, true, null);
+            }
+
+            _logger.LogError(
+                "Failed to create firewall rule '{RuleName}'. Status: {StatusCode}, Error: {Error}",
+                ruleName,
+                response.StatusCode,
+                errorContent
+            );
+            return (false, false, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Error creating firewall rule '{RuleName}' for server {ServerName}",
+                ruleName,
+                serverName
+            );
+            return (false, false, null);
+        }
+    }
 }
 
 // ============ Response DTOs ============
@@ -237,10 +452,29 @@ public class AzureFirewallProperties
     public string? endIpAddress { get; set; }
 }
 
+// ============ Request DTOs ============
+
+public class CreateFirewallRuleRequest
+{
+    [JsonPropertyName("properties")]
+    public CreateFirewallRuleProperties Properties { get; set; } = new();
+}
+
+public class CreateFirewallRuleProperties
+{
+    [JsonPropertyName("startIpAddress")]
+    public string StartIpAddress { get; set; } = "";
+
+    [JsonPropertyName("endIpAddress")]
+    public string EndIpAddress { get; set; } = "";
+}
+
 // ============ JSON Serialization Context ============
 
 [JsonSerializable(typeof(AzureTokenResponse))]
 [JsonSerializable(typeof(AzureFirewallListResponse))]
 [JsonSerializable(typeof(AzureFirewall))]
 [JsonSerializable(typeof(List<AzureFirewall>))]
+[JsonSerializable(typeof(CreateFirewallRuleRequest))]
+[JsonSerializable(typeof(CreateFirewallRuleProperties))]
 internal partial class AzureJsonContext : JsonSerializerContext { }

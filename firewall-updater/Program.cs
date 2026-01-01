@@ -173,6 +173,112 @@ app.MapGet(
         "Lists all Azure Firewalls accessible by the specified configuration. Optionally filter by resource group."
     );
 
+// Ensure current IP is in firewall rules
+app.MapPost(
+        "/firewall-rules/{name}/ensure-ip",
+        async (
+            string name,
+            AzureFirewallService firewallService,
+            PublicIpService ipService,
+            ILogger<Program> logger
+        ) =>
+        {
+            // Get the current public IP
+            var publicIp = await ipService.GetPublicIpAsync();
+            if (publicIp == null)
+            {
+                return Results.Problem("Failed to retrieve public IP address", statusCode: 503);
+            }
+
+            // Get the configuration
+            var config = builder
+                .Configuration.GetSection("FirewallDefinitions")
+                .Get<List<AzureFirewallConfiguration>>()
+                ?.FirstOrDefault(r => r.name == name);
+
+            if (config == null)
+            {
+                return Results.NotFound(new { message = $"Configuration '{name}' not found" });
+            }
+
+            if (string.IsNullOrWhiteSpace(config.password))
+            {
+                return Results.BadRequest(
+                    new { message = $"Configuration '{name}' has no password configured" }
+                );
+            }
+
+            if (string.IsNullOrWhiteSpace(config.subscriptionId))
+            {
+                return Results.BadRequest(
+                    new { message = $"Configuration '{name}' has no subscriptionId configured" }
+                );
+            }
+
+            // List existing firewall rules
+            var firewalls = await firewallService.ListFirewallsAsync(config);
+            if (firewalls == null)
+            {
+                return Results.Problem("Failed to retrieve firewalls from Azure", statusCode: 502);
+            }
+
+            // Check if current IP is already in the list
+            var existingRule = firewalls.Value?.FirstOrDefault(f =>
+                f.Properties?.startIpAddress == publicIp && f.Properties?.endIpAddress == publicIp
+            );
+
+            if (existingRule != null)
+            {
+                logger.LogInformation(
+                    "IP {PublicIp} already exists in firewall rule '{RuleName}'",
+                    publicIp,
+                    existingRule.Name
+                );
+                return Results.Ok(
+                    new EnsureIpResponse(
+                        publicIp,
+                        existingRule.Name,
+                        Created: false,
+                        Message: $"IP {publicIp} already exists in rule '{existingRule.Name}'"
+                    )
+                );
+            }
+
+            // Create a new firewall rule
+            var newRule = await firewallService.CreateFirewallRuleAsync(
+                config,
+                "Automatic IP",
+                publicIp,
+                publicIp
+            );
+
+            if (newRule == null)
+            {
+                return Results.Problem("Failed to create firewall rule", statusCode: 502);
+            }
+
+            logger.LogInformation(
+                "Created new firewall rule '{RuleName}' for IP {PublicIp}",
+                newRule.Name,
+                publicIp
+            );
+
+            return Results.Ok(
+                new EnsureIpResponse(
+                    publicIp,
+                    newRule.Name,
+                    Created: true,
+                    Message: $"Created new firewall rule '{newRule.Name}' for IP {publicIp}"
+                )
+            );
+        }
+    )
+    .WithName("EnsureIpInFirewall")
+    .WithSummary("Ensure current IP is in firewall rules")
+    .WithDescription(
+        "Checks if the service's public IP is in the firewall rules. If not, creates a new rule named 'Automatic IP' (with incrementing suffix if needed)."
+    );
+
 // Health check endpoints
 app.MapGet("/health", () => Results.Ok())
     .WithName("HealthCheck")
@@ -214,7 +320,10 @@ public record FirewallRule(
     string subscriptionId = ""
 );
 
+public record EnsureIpResponse(string IpAddress, string RuleName, bool Created, string Message);
+
 [JsonSerializable(typeof(IpInfo))]
+[JsonSerializable(typeof(EnsureIpResponse))]
 [JsonSerializable(typeof(FirewallRule))]
 [JsonSerializable(typeof(FirewallRules))]
 [JsonSerializable(typeof(List<AzureFirewallConfiguration>))]
