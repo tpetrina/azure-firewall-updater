@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: azure-firewall-updater
+  labels:
+    app: azure-firewall-updater
+spec:
+  selector:
+    matchLabels:
+      app: azure-firewall-updater
+  template:
+    metadata:
+      labels:
+        app: azure-firewall-updater
+    spec:
+      containers:
+        - name: azure-firewall-updater
+          image: registry.digitalocean.com/luggage/azure-firewall-updater:latest
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10

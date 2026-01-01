@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: azure-firewall-updater
+  labels:
+    app: azure-firewall-updater
+spec:
+  selector:
+    app: azure-firewall-updater
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
