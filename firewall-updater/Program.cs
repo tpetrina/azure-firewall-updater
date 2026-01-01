@@ -26,6 +26,30 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
+// Log public IP on startup
+_ = Task.Run(async () =>
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    var ipService = app.Services.GetRequiredService<PublicIpService>();
+
+    try
+    {
+        var publicIp = await ipService.GetPublicIpAsync();
+        if (publicIp != null)
+        {
+            logger.LogInformation("Public IP address: {PublicIp}", publicIp);
+        }
+        else
+        {
+            logger.LogWarning("Failed to retrieve public IP address on startup");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error retrieving public IP address on startup");
+    }
+});
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
