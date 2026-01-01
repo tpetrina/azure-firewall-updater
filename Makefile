@@ -31,3 +31,5 @@ docker-build:
 docker-publish: docker-build
 	docker push $(REGISTRY)/$(IMAGE):$(TAG)
  
+ deploy:
+	cd manifests && kubectl apply -f service.yaml,daemonset.yaml

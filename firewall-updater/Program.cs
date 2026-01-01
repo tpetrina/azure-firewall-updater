@@ -18,8 +18,11 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("AzureAuth");
+builder.Services.AddHttpClient("AzureManagement");
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<PublicIpService>();
+builder.Services.AddSingleton<AzureFirewallService>();
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -77,19 +80,22 @@ app.MapGet(
     );
 
 app.MapGet(
-    "/firewall-rules",
+    "/definitions",
     () =>
     {
         var rules = builder
-            .Configuration.GetSection("FirewallRules")
+            .Configuration.GetSection("FirewallDefinitions")
             .Get<List<AzureFirewallConfiguration>>();
         // Return only relevant info, omitting password
         var trimmedRules = rules
             ?.Select(r => new FirewallRule(
                 r.name,
+                r.resourceGroup,
+                r.serverName,
                 r.appId,
                 r.tenant,
-                string.IsNullOrWhiteSpace(r.password) ? null : "********"
+                string.IsNullOrWhiteSpace(r.password) ? null : "********",
+                r.subscriptionId
             ))
             .ToList();
         return Results.Ok(trimmedRules);
@@ -97,20 +103,75 @@ app.MapGet(
 );
 
 app.MapGet(
-    "/firewall-rules/{name}",
+    "/definitions/{name}",
     (string name) =>
     {
         var rule = builder
-            .Configuration.GetSection("FirewallRules")
+            .Configuration.GetSection("FirewallDefinitions")
             .Get<List<AzureFirewallConfiguration>>()
             ?.FirstOrDefault(r => r.name == name);
         if (rule == null)
         {
             return Results.NotFound(new { message = $"Firewall rule {name} not found" });
         }
-        return Results.Ok(new FirewallRule(rule.name, rule.appId, rule.tenant));
+        return Results.Ok(
+            new FirewallRule(
+                rule.name,
+                rule.resourceGroup,
+                rule.serverName,
+                rule.appId,
+                rule.tenant,
+                string.IsNullOrWhiteSpace(rule.password) ? null : "********",
+                rule.subscriptionId
+            )
+        );
     }
 );
+
+// List Azure Firewalls for a configuration
+app.MapGet(
+        "/firewall-rules/{name}",
+        async (string name, string? resourceGroup, AzureFirewallService firewallService) =>
+        {
+            var config = builder
+                .Configuration.GetSection("FirewallDefinitions")
+                .Get<List<AzureFirewallConfiguration>>()
+                ?.FirstOrDefault(r => r.name == name);
+
+            if (config == null)
+            {
+                return Results.NotFound(new { message = $"Configuration '{name}' not found" });
+            }
+
+            if (string.IsNullOrWhiteSpace(config.password))
+            {
+                return Results.BadRequest(
+                    new { message = $"Configuration '{name}' has no password configured" }
+                );
+            }
+
+            if (string.IsNullOrWhiteSpace(config.subscriptionId))
+            {
+                return Results.BadRequest(
+                    new { message = $"Configuration '{name}' has no subscriptionId configured" }
+                );
+            }
+
+            var firewalls = await firewallService.ListFirewallsAsync(config);
+
+            if (firewalls == null)
+            {
+                return Results.Problem("Failed to retrieve firewalls from Azure", statusCode: 502);
+            }
+
+            return Results.Ok(firewalls);
+        }
+    )
+    .WithName("ListFirewalls")
+    .WithSummary("List Azure Firewalls for a configuration")
+    .WithDescription(
+        "Lists all Azure Firewalls accessible by the specified configuration. Optionally filter by resource group."
+    );
 
 // Health check endpoints
 app.MapGet("/health", () => Results.Ok())
@@ -133,17 +194,30 @@ app.Run();
 public class AzureFirewallConfiguration
 {
     public string name { get; set; } = "";
+    public string resourceGroup { get; set; } = "";
+    public string serverName { get; set; } = "";
     public string appId { get; set; } = "";
     public string tenant { get; set; } = "";
     public string password { get; set; } = "";
+    public string subscriptionId { get; set; } = "";
 }
 
 public record FirewallRules(List<FirewallRule> rules);
 
-public record FirewallRule(string name, string description, string tenant, string password = "");
+public record FirewallRule(
+    string name,
+    string resourceGroup,
+    string serverName,
+    string description,
+    string tenant,
+    string? password = null,
+    string subscriptionId = ""
+);
 
 [JsonSerializable(typeof(IpInfo))]
 [JsonSerializable(typeof(FirewallRule))]
 [JsonSerializable(typeof(FirewallRules))]
 [JsonSerializable(typeof(List<AzureFirewallConfiguration>))]
+[JsonSerializable(typeof(AzureFirewallListResponse))]
+[JsonSerializable(typeof(AzureFirewall))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext { }
