@@ -1,4 +1,8 @@
-.PHONY: all
+.PHONY: all docker-build docker-publish
+
+REGISTRY := registry.digitalocean.com/luggage
+IMAGE := azure-firewall-updater
+TAG ?= $(shell git rev-parse --short=7 HEAD)
 
 setup:
 	dotnet tool restore
@@ -20,4 +24,10 @@ test:
 
 quality:
 	dotnet csharpier format .
+
+docker-build:
+	docker build -t $(REGISTRY)/$(IMAGE):$(TAG) .
+
+docker-publish: docker-build
+	docker push $(REGISTRY)/$(IMAGE):$(TAG)
  
