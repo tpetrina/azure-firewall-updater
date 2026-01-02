@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: azure-firewall-updater
-          image: registry.digitalocean.com/luggage/azure-firewall-updater:latest
+          image: registry.digitalocean.com/luggage/azure-firewall-updater:9bd001e
           ports:
             - containerPort: 8080
               protocol: TCP
