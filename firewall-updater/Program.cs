@@ -29,29 +29,249 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Log public IP on startup
+// Log public IP on startup, ensure IP is in all configured firewalls, and send notification
 _ = Task.Run(async () =>
 {
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
     var ipService = app.Services.GetRequiredService<PublicIpService>();
+    var firewallService = app.Services.GetRequiredService<AzureFirewallService>();
+    var httpClientFactory = app.Services.GetRequiredService<IHttpClientFactory>();
+
+    // Track results for notification
+    var created = new List<string>();
+    var alreadyExisted = new List<string>();
+    var skipped = new List<string>();
+    var failed = new List<string>();
+    string? publicIp = null;
 
     try
     {
-        var publicIp = await ipService.GetPublicIpAsync();
-        if (publicIp != null)
+        publicIp = await ipService.GetPublicIpAsync();
+        if (publicIp == null)
         {
-            logger.LogInformation("Public IP address: {PublicIp}", publicIp);
+            logger.LogWarning("Failed to retrieve public IP address on startup");
+            failed.Add("IP fetch failed");
         }
         else
         {
-            logger.LogWarning("Failed to retrieve public IP address on startup");
+            logger.LogInformation("Public IP address: {PublicIp}", publicIp);
+
+            // Get all firewall definitions
+            var definitions = builder
+                .Configuration.GetSection("FirewallDefinitions")
+                .Get<List<AzureFirewallConfiguration>>();
+
+            if (definitions == null || definitions.Count == 0)
+            {
+                logger.LogInformation(
+                    "No firewall definitions configured, skipping firewall updates"
+                );
+                skipped.Add("No definitions configured");
+            }
+            else
+            {
+                logger.LogInformation(
+                    "Updating firewall rules for {Count} definitions",
+                    definitions.Count
+                );
+
+                foreach (var config in definitions)
+                {
+                    try
+                    {
+                        // Skip definitions without required credentials
+                        if (string.IsNullOrWhiteSpace(config.password))
+                        {
+                            logger.LogWarning(
+                                "Skipping definition '{Name}': no password configured",
+                                config.name
+                            );
+                            skipped.Add($"{config.name} (no password)");
+                            continue;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(config.subscriptionId))
+                        {
+                            logger.LogWarning(
+                                "Skipping definition '{Name}': no subscriptionId configured",
+                                config.name
+                            );
+                            skipped.Add($"{config.name} (no subscriptionId)");
+                            continue;
+                        }
+
+                        // List existing firewall rules
+                        var firewalls = await firewallService.ListFirewallsAsync(config);
+                        if (firewalls == null)
+                        {
+                            logger.LogError(
+                                "Failed to list firewalls for definition '{Name}'",
+                                config.name
+                            );
+                            failed.Add($"{config.name} (list failed)");
+                            continue;
+                        }
+
+                        // Check if current IP is already in the list
+                        var existingRule = firewalls.Value?.FirstOrDefault(f =>
+                            f.Properties?.startIpAddress == publicIp
+                            && f.Properties?.endIpAddress == publicIp
+                        );
+
+                        if (existingRule != null)
+                        {
+                            logger.LogInformation(
+                                "Definition '{Name}': IP {PublicIp} already exists in rule '{RuleName}'",
+                                config.name,
+                                publicIp,
+                                existingRule.Name
+                            );
+                            alreadyExisted.Add(config.name);
+                            continue;
+                        }
+
+                        // Create a new firewall rule
+                        var newRule = await firewallService.CreateFirewallRuleAsync(
+                            config,
+                            "Automatic IP",
+                            publicIp,
+                            publicIp
+                        );
+
+                        if (newRule == null)
+                        {
+                            logger.LogError(
+                                "Definition '{Name}': Failed to create firewall rule for IP {PublicIp}",
+                                config.name,
+                                publicIp
+                            );
+                            failed.Add($"{config.name} (create failed)");
+                            continue;
+                        }
+
+                        logger.LogInformation(
+                            "Definition '{Name}': Created firewall rule '{RuleName}' for IP {PublicIp}",
+                            config.name,
+                            newRule.Name,
+                            publicIp
+                        );
+                        created.Add(config.name);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(
+                            ex,
+                            "Error updating firewall for definition '{Name}'",
+                            config.name
+                        );
+                        failed.Add($"{config.name} (exception)");
+                    }
+                }
+            }
+
+            logger.LogInformation("Completed firewall rule updates for all definitions");
         }
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Error retrieving public IP address on startup");
+        logger.LogError(ex, "Error during startup firewall update process");
+        failed.Add("Startup process exception");
     }
+
+    // Send notification to ntfy.sh
+    await SendStartupNotificationAsync(
+        httpClientFactory,
+        logger,
+        publicIp,
+        created,
+        alreadyExisted,
+        skipped,
+        failed
+    );
 });
+
+// Helper method for sending ntfy notification
+async Task SendStartupNotificationAsync(
+    IHttpClientFactory httpClientFactory,
+    Microsoft.Extensions.Logging.ILogger logger,
+    string? publicIp,
+    List<string> created,
+    List<string> alreadyExisted,
+    List<string> skipped,
+    List<string> failed
+)
+{
+    try
+    {
+        var hasFailures = failed.Count > 0;
+        var emoji = hasFailures ? "⚠️" : "✅";
+
+        var messageParts = new List<string>();
+
+        // Header with IP
+        if (publicIp != null)
+        {
+            messageParts.Add($"{emoji} Firewall Updater started (IP: {publicIp})");
+        }
+        else
+        {
+            messageParts.Add($"{emoji} Firewall Updater started (IP: unknown)");
+        }
+
+        // Results summary
+        if (created.Count > 0)
+        {
+            messageParts.Add($"Created: {string.Join(", ", created)}");
+        }
+        if (alreadyExisted.Count > 0)
+        {
+            messageParts.Add($"Already existed: {string.Join(", ", alreadyExisted)}");
+        }
+        if (skipped.Count > 0)
+        {
+            messageParts.Add($"Skipped: {string.Join(", ", skipped)}");
+        }
+        if (failed.Count > 0)
+        {
+            messageParts.Add($"Failed: {string.Join(", ", failed)}");
+        }
+
+        // If nothing happened, say so
+        if (
+            created.Count == 0
+            && alreadyExisted.Count == 0
+            && skipped.Count == 0
+            && failed.Count == 0
+        )
+        {
+            messageParts.Add("No definitions processed");
+        }
+
+        var message = string.Join("\n", messageParts);
+
+        using var httpClient = httpClientFactory.CreateClient();
+        httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+        var content = new StringContent(message);
+        var response = await httpClient.PostAsync("https://ntfy.sh/massivepixel_45h6jk", content);
+
+        if (response.IsSuccessStatusCode)
+        {
+            logger.LogDebug("Startup notification sent successfully");
+        }
+        else
+        {
+            logger.LogWarning(
+                "Failed to send startup notification. Status: {StatusCode}",
+                response.StatusCode
+            );
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Error sending startup notification");
+    }
+}
 
 if (app.Environment.IsDevelopment())
 {
