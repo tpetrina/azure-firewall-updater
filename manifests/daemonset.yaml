@@ -20,16 +20,15 @@ spec:
           ports:
             - containerPort: 8080
               protocol: TCP
+          envFrom:
+            - secretRef:
+                name: azure-sp
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "50m"
-            limits:
-              memory: "128Mi"
-              cpu: "100m"
+              memory: "32Mi"
           livenessProbe:
             httpGet:
               path: /health
