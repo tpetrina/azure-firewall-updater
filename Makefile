@@ -35,4 +35,5 @@ push-tag:
 	docker push $(REGISTRY)/$(IMAGE):$(TAG)
  
 deploy:
-	cd manifests && kubectl apply -f networkpolicy.yaml,service.yaml,daemonset.yaml
+	sed -i '' 's|image: $(REGISTRY)/$(IMAGE):.*|image: $(REGISTRY)/$(IMAGE):$(TAG)|' manifests/daemonset.yaml
+	kubectl apply -f manifests/
