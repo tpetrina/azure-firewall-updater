@@ -1,6 +1,6 @@
 ## Configuration
 
-### Local developmen
+### Local development
 
 `dotnet user-secrets list`
 
@@ -49,3 +49,44 @@ az role assignment create \
   --role "SQL Security Manager" \
   --scope "/subscriptions/$SUBSCRIPTION/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Sql/servers/$SERVER_NAME"
 ```
+
+## Kubernetes Deployment
+
+### Network Policy
+
+This service deploys with a NetworkPolicy that:
+- Blocks all ingress traffic (no incoming connections allowed)
+- Allows egress to DNS (UDP 53) for hostname resolution
+- Allows egress to external HTTPS (port 443) for api.ipify.org, Azure AD, and Azure Management API
+
+### Testing Network Policies
+
+1. **Check CNI supports policies:**
+   ```bash
+   kubectl get pods -n kube-system | grep cilium
+   ```
+
+2. **Deploy:**
+   ```bash
+   kubectl create namespace azure-firewall-updater
+   make deploy
+   ```
+
+3. **Verify policy exists:**
+   ```bash
+   kubectl get networkpolicy -n azure-firewall-updater
+   ```
+
+4. **Test ingress is blocked** (from another namespace):
+   ```bash
+   kubectl run test-pod --image=busybox --rm -it --restart=Never -- \
+     wget -qO- --timeout=5 http://azure-firewall-updater.azure-firewall-updater.svc.cluster.local/health
+   ```
+   Expected: Connection should timeout.
+
+5. **Test egress works** (from inside the pod):
+   ```bash
+   POD=$(kubectl get pods -n azure-firewall-updater -o jsonpath='{.items[0].metadata.name}')
+   kubectl exec -n azure-firewall-updater $POD -- wget -qO- https://api.ipify.org
+   ```
+   Expected: Returns public IP address.

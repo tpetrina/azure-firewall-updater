@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: azure-firewall-updater
+  namespace: azure-firewall-updater
   labels:
     app: azure-firewall-updater
 spec:
