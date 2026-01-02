@@ -19,7 +19,7 @@ jobs:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
       - name: Log in to DigitalOcean Container Registry
-        run: doctl registry login --expiry-seconds 1200
+        run: doctl registry login --expiry-seconds 120
 
       - name: Get short SHA
         id: sha
@@ -27,3 +27,30 @@ jobs:
 
       - name: Build and push Docker image
         run: make docker-publish TAG=${{ steps.sha.outputs.sha7 }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Get cluster
+        run: doctl kubernetes cluster kubeconfig save discworld
+
+      - name: Deploy to Kubernetes
+        run: make deploy TAG=${{ steps.sha.outputs.sha7 }}
+
+  notify-success:
+    runs-on: ubuntu-latest
+    needs: [build-and-publish]
+    if: success()
+
+    steps:
+      - name: Notify on success
+        run: curl -d "Azure Firewall Updater deployed 🥳" ntfy.sh/massivepixel_45h6jk
+
+  notify-failure:
+    needs: [build-and-publish]
+    if: failure()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify on failure
+        run: curl -d "Azure Firewall Updater failed to deploy 😭" ntfy.sh/massivepixel_45h6jk

@@ -35,7 +35,11 @@ push-tag:
 	docker push $(REGISTRY)/$(IMAGE):$(TAG)
  
 deploy:
+	sed -i 's|image: $(REGISTRY)/$(IMAGE):.*|image: $(REGISTRY)/$(IMAGE):$(TAG)|' manifests/daemonset.yaml
+	kubectl apply -f manifests/
+
+deploy-macos:
 	sed -i '' 's|image: $(REGISTRY)/$(IMAGE):.*|image: $(REGISTRY)/$(IMAGE):$(TAG)|' manifests/daemonset.yaml
 	kubectl apply -f manifests/
 
-all-local: docker-build push-tag deploy
+all-local: docker-build push-tag deploy-macos
