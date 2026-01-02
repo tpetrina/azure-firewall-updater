@@ -30,6 +30,9 @@ docker-build:
 
 docker-publish: docker-build
 	docker push $(REGISTRY)/$(IMAGE):$(TAG)
+
+push-tag:
+	docker push $(REGISTRY)/$(IMAGE):$(TAG)
  
 deploy:
 	cd manifests && kubectl apply -f networkpolicy.yaml,service.yaml,daemonset.yaml
